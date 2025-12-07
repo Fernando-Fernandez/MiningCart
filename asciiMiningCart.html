@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ASCII Mine Cart Tunnel</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: black;
+      color: #eee;
+      overflow: hidden;
+    }
+    #screen {
+      font-family: monospace;
+      white-space: pre;
+      line-height: 1;
+      font-size: 14px; /* set coarse/fine resolution */
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+<pre id="screen"></pre>
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------------
+  // ASCII "framebuffer"
+  // ---------------------------------------------------------------------------
+  const COLS = 120;  // characters horizontally
+  const ROWS = 40;   // characters vertically
+
+  const screen = document.getElementById("screen");
+
+  const RAMP = " .:-◻️◻️▆█▆█"; // darkest to brightest
+
+  let charBuf = Array.from({ length: ROWS }, () => Array(COLS).fill(" "));
+  let brightBuf = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+
+  function clearBuffer() {
+    for (let y = 0; y < ROWS; y++) {
+      charBuf[y].fill(" ");
+      brightBuf[y].fill(0);
+    }
+  }
+
+  function plotChar(x, y, brightness) {
+    const cx = x | 0;
+    const cy = y | 0;
+    if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) return;
+
+    if (brightness <= brightBuf[cy][cx]) return;
+
+    brightBuf[cy][cx] = brightness;
+
+    const idx = (brightness / 255 * (RAMP.length - 1)) | 0;
+    const ch = RAMP[idx];
+    charBuf[cy][cx] = ch;
+  }
+
+  function flushBuffer() {
+    let out = "";
+    for (let y = 0; y < ROWS; y++) {
+      out += charBuf[y].join("") + "\n";
+    }
+    screen.textContent = out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tunnel simulation
+  // ---------------------------------------------------------------------------
+
+  const HORIZON_STEPS    = 1400;
+  const SECTION_LENGTH   = 800;
+  const LIGHT_PERIOD     = 400;
+
+  const WALL_STEP        = 10;
+  const RAILS_STEP       = 5;
+  const STULL_STEP       = 40;
+  const STULL_HORIZ_STEP = 20;
+
+  const WALL_RAD_BASE    = 9.8;
+
+  // materials: [lowBrightness, highBrightness]
+  const MATERIAL = {
+    wall:  [10, 130],
+    stull: [60, 160],
+    rail:  [120, 255],
+    cord:  [40, 160],
+    bulb:  [200, 255]
+  };
+
+  class Block {
+    constructor(x, y, material) {
+      this.x = x;         // local x in tunnel space
+      this.y = y;         // local y (up/down)
+      this.material = material;
+    }
+  }
+
+  class Segment {
+    constructor() {
+      this.x = 0;
+      this.xv = 0;
+      this.y = 0;
+      this.yv = 0;
+      this.light = 0;        // brightness from nearest bulb
+      this.hasBulb = false;
+      this.lightBroken = false;
+      this.noise1 = Math.random() * 1000;
+      this.noise2 = Math.random() * 1000;
+      this.blocks = [];
+    }
+  }
+
+  const segments = Array.from({ length: HORIZON_STEPS }, () => new Segment());
+
+  let lastGen = 0;
+
+  // section state (similar roles to JS1K original)
+  let I = 0, J = 0;   // tunnel x, x'
+  let U = 0, V = 0;   // tunnel y, y'
+  let Q = 0;          // depth mode (0/1)
+  let P = 0;          // slope
+  let K = 0;          // curvature
+  let B = 0;          // section type (0=cave,1=room)
+  let W = 0;          // rail vertical offset
+  let E = 0;          // vertical reference
+
+  function generate(targetStep) {
+    for (let i = lastGen; i < targetStep; i++) {
+      const s = i % SECTION_LENGTH;
+      const seg = segments[i % HORIZON_STEPS];
+      seg.blocks.length = 0;
+
+      if (s === 0) {
+        const D = i / SECTION_LENGTH;
+
+        // slope: up/down or flat
+        if (D & 1) {
+          const newDepth = Math.random() > 0.5 ? 1 : 0;
+          P = -Q + (Q = newDepth);
+        } else {
+          P = 0;
+        }
+
+        // curvature: left/straight/right
+        if (!P && D > 0) {
+          K = (K + 2 + (Math.random() > 0.5 ? 1 : 0)) % 3 - 1;
+        }
+
+        // room sections after some distance
+        if (!P && D > 9 && !B && Math.random() > 0.7) {
+          B = 1;
+        } else if (P || D <= 9) {
+          B = 0;
+        }
+
+        // rail vertical offset
+        W = 1.8 * Math.random() - 1;
+      }
+
+      // vertical reference accumulation
+      E += (s < 160 ? 1 : 0) - (s > 639 ? 1 : 0);
+
+      // update tunnel center position
+      I += J;
+      J += K;
+      U += V;
+      V = P * E;
+
+      seg.x = I;
+      seg.xv = J;
+      seg.y = U;
+      seg.yv = V;
+
+      // bulb-based lighting (gaussian along track)
+      const phase = i % LIGHT_PERIOD;
+      const center = LIGHT_PERIOD / 2;
+      const dist = Math.abs(phase - center);
+      const sigma = LIGHT_PERIOD / 6;
+
+      let light = Math.exp(-(dist * dist) / (2 * sigma * sigma)); // 0..1
+
+      seg.hasBulb = (phase === center);
+      seg.lightBroken = seg.hasBulb && Math.random() < 0.05;
+
+      if (seg.lightBroken) {
+        light = 0;
+      }
+
+      seg.light = light;
+
+      // wall / scene geometry
+      if (i % WALL_STEP === 0) {
+        let R = WALL_RAD_BASE + B * E / 15;
+        let zOff = W * B * E / 15;
+
+        // sample around circle
+        for (let g = 0; g < Math.PI * 2; g += 2 / R) {
+          if (Math.random() < 0.2) continue; // some gaps
+
+          const x = 1.1 * R * Math.cos(g + 1.0); // rotated a bit
+          const y = R * Math.cos(g) + 2 + zOff;
+          seg.blocks.push(new Block(x, y, "wall"));
+        }
+
+        // stulls in cave, flat sections only
+        if (!P && !B) {
+          if (i % STULL_STEP === 0) {
+            seg.blocks.push(new Block(-6, 5, "stull"));
+            seg.blocks.push(new Block( 6, 5, "stull"));
+          }
+          if (i % STULL_HORIZ_STEP === 0) {
+            seg.blocks.push(new Block(0, 8, "stull"));
+          }
+        }
+
+        // cord + bulb at the center of light period
+        if (seg.hasBulb) {
+          seg.blocks.push(new Block(0, R + zOff - 1, "cord"));
+          seg.blocks.push(new Block(0, R + zOff - 3, "bulb"));
+        }
+      }
+
+      // rails
+      if (i % RAILS_STEP === 0) {
+        seg.blocks.push(new Block(-2, -6.5, "rail"));
+        seg.blocks.push(new Block( 2, -6.5, "rail"));
+      }
+    }
+
+    lastGen = targetStep;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shading
+  // ---------------------------------------------------------------------------
+
+  function shade(material, seg, block, fog) {
+    const baseRange = MATERIAL[material] || [60, 180];
+    let lo = baseRange[0], hi = baseRange[1];
+    let L;
+
+    if (material === "wall") {
+      // walls are mostly dark, lit by bulbs
+      const base = lo + seg.light * (hi - lo);
+
+      // vertical bands (sediment layers)
+      const stripe = Math.sin(block.y * 0.4 + seg.noise1) * 0.15;
+
+      // horizontal streaks
+      const patch = Math.sin(block.x * 0.6 + seg.noise2) * 0.10;
+
+      // fine grain
+      const grain = (Math.sin(block.x * 3.3 + block.y * 2.1 + seg.noise1) * 0.5 + 0.5) * 0.15;
+
+      L = base * (1 + stripe + patch + grain);
+
+      // darker near floor
+      const floorFactor = Math.max(0, 1 - (block.y + 10) / 20);
+      L *= (1 - 0.3 * floorFactor);
+    } else if (material === "rail") {
+      // rails: bright, metal-like, still affected by bulb
+      const lit = Math.min(1, seg.light * 1.4 + 0.1);
+      L = lo + lit * (hi - lo);
+    } else if (material === "stull") {
+      // structural beams
+      const lit = Math.min(1, seg.light * 1.0 + 0.05);
+      L = lo + lit * (hi - lo);
+    } else if (material === "cord") {
+      const lit = Math.min(1, seg.light * 0.8 + 0.1);
+      L = lo + lit * (hi - lo);
+    } else if (material === "bulb") {
+      // bulbs very bright, except when broken
+      L = seg.lightBroken ? lo : hi;
+    } else {
+      // fallback
+      L = lo + seg.light * (hi - lo);
+    }
+
+    // depth fog
+    L *= (1 - fog * 0.6);
+
+    if (L < 0) L = 0;
+    if (L > 255) L = 255;
+    return L;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Projection and drawing (ASCII)
+  // ---------------------------------------------------------------------------
+
+  let cartF = 0;
+  let cart = 0;
+
+  function drawSegment(i) {
+    const d = i - cart;
+    if (d <= 0) return;
+
+    const seg = segments[i % HORIZON_STEPS];
+    const base = segments[cart % HORIZON_STEPS];
+
+    // perspective factor (smaller -> further)
+    const halfCols = COLS / 2;
+    const halfRows = ROWS / 2;
+
+    const f = halfCols / (d / 10 + 3); // tuned from canvas version
+
+    const dx = seg.x - base.x - d * base.xv;
+    const dy = seg.y - base.y - d * base.yv;
+
+    const sxC = halfCols + f * dx / 3000;
+    const syC = halfRows + f * dy / 3000;
+
+    const fog = Math.min(1, d / 900);
+
+    for (const b of seg.blocks) {
+      const L = shade(b.material, seg, b, fog);
+
+      const xScreen = sxC + f * b.x;
+      const yScreen = syC - f * b.y;
+
+      plotChar(xScreen, yScreen, L);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------------------
+
+  function step() {
+    if (cart + HORIZON_STEPS > lastGen - 200) {
+      generate(cart + HORIZON_STEPS);
+    }
+
+    const seg = segments[cart % HORIZON_STEPS];
+    cartF += 4 + seg.y / 30000;
+    cart = cartF | 0;
+
+    clearBuffer();
+
+    for (let i = lastGen - 1; i >= cart; i--) {
+      drawSegment(i);
+    }
+
+    flushBuffer();
+    requestAnimationFrame(step);
+  }
+
+  generate(HORIZON_STEPS);
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>

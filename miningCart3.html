@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Mine Cart Tunnel - Strong Contrast</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: black; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  const HORIZON_STEPS    = 1400;
+  const SECTION_LENGTH   = 800;
+  const LIGHT_PERIOD     = 400;
+  const WALL_STEP        = 10;
+  const RAILS_STEP       = 5;
+  const STULL_STEP       = 40;
+  const STULL_HORIZ_STEP = 20;
+
+  const WALL_RAD_BASE    = 9.8;
+  const LIGHT_FALLOFF    = 3000;
+
+  const canvas = document.getElementById("c");
+  const ctx    = canvas.getContext("2d");
+
+  function resize() {
+    const s = window.innerHeight;
+    canvas.width = s;
+    canvas.height = s;
+  }
+  resize();
+  window.addEventListener("resize", resize);
+
+  let half = canvas.width/2;
+
+  class Block {
+    constructor(x, material, w, y, h) {
+      this.x = x;
+      this.material = material;
+      this.w = w;
+      this.y = y;
+      this.h = h;
+    }
+  }
+
+  class Segment {
+    constructor() {
+      this.x = 0;
+      this.xv = 0;
+      this.y = 0;
+      this.yv = 0;
+      this.light = 0;
+      this.lightPhase = 0;
+      this.lightBroken = false;
+      this.blocks = [];
+    }
+  }
+
+  const segments = Array.from({length:HORIZON_STEPS}, () => new Segment());
+
+  let lastGen = 0;
+  let cartF = 0, cart = 0;
+  let roomLen = 0;
+  let C = 0; // stalactite cave flag
+
+  let I=0,J=0,U=0,V=0,Q=0,P=0,K=0,B=0,W=0,E=0;
+
+  function generate(target) {
+    for (let i=lastGen; i<target; i++) {
+      const s = i % SECTION_LENGTH;
+      if (s === 0) {
+        const D = i/SECTION_LENGTH;
+        if (D & 1) {
+          const qn = Math.random()>.5?1:0;
+          P = -Q + (Q=qn);
+        } else P = 0;
+
+        if (!P && D>0) K = (K+2+(Math.random()>.5))%3 - 1;
+        //B = (!P && D>9 && !B && Math.random()>.7)?1:B;
+        // Section selection order:
+        // Slope > Room > Stalactite Cave > Normal tunnel
+
+        // Reset flags each section start
+        if (s === 0) {
+          B = 0;
+          C = 0;
+
+          const D = i / SECTION_LENGTH;
+
+          if (P) {
+            // slope section: no caves
+            B = 0; C = 0;
+          }
+          else if (D > 12 && Math.random() < 0.08) {
+            // rooms: rarer + limited length
+            B = 1;
+            roomLen = 0;
+          }
+          else if (D > 5 && Math.random() < 0.15) {
+            // stalactite cave: more frequent
+            C = 1;
+          }
+        }
+
+        // cap room section length
+        if (B) {
+          roomLen++;
+          if (roomLen > 50) B = 0;
+        }
+
+        W = 1.8*Math.random() - 1;
+      }
+
+      E += (s<160?1:0) - (s>639?1:0);
+
+      const seg = segments[i % HORIZON_STEPS];
+      seg.blocks.length = 0;
+
+      I += J; J += K;
+      U += V; V = P*E;
+
+      seg.x = I; seg.xv = J;
+      seg.y = U; seg.yv = V;
+
+      if (!P) {
+        const l = i%LIGHT_PERIOD - LIGHT_PERIOD/2;
+        seg.light = Math.exp(-(l*l)/(2*(LIGHT_PERIOD*LIGHT_PERIOD)/9));
+
+        seg.lightBroken = Math.random()>.95;
+      } else seg.light = 0;
+
+      seg.lightPhase = i % LIGHT_PERIOD;
+
+      if (i%WALL_STEP===0) {
+        let R = WALL_RAD_BASE + B*E/15;
+        let zOff = W*B*E/15;
+
+        for (let g=Math.random()/6; g<6.28; g+=2/R) {
+          if (Math.random()<0.3) continue;
+          seg.blocks.push(new Block(
+            1.1*R*Math.cos(g+11),
+            "wall",
+            4,
+            R*Math.cos(g)+2+zOff,
+            4
+          ));
+        }
+
+        // --- stalactite cave (only if wide cave) ---
+        if (C) {
+
+          // enforce wider geometry
+          const isWide = R > WALL_RAD_BASE + 1.0;
+          if (isWide) {
+
+            // pick random ceiling positions
+            const spikes = 2 + (Math.random()*3)|0;
+            for (let n = 0; n < spikes; n++) {
+
+              // random cave angle
+              const ang = Math.random()*Math.PI*2;
+              const cx = 1.1 * R * Math.cos(ang);   // x on wall circle
+
+              // compute exact ceiling y (highest point on circle)
+              const cy = R + 2 + zOff;              // force top instead of cos(g)
+
+              // stalactite length
+              const len = 3 + Math.random()*4;
+
+              // draw downward from ceiling
+              for (let k = 0; k < len; k++) {
+                seg.blocks.push(new Block(
+                  cx,
+                  "stull",   // rough surface shading works well as limestone
+                  1.4,
+                  cy - k*0.9,
+                  1.1
+                ));
+              }
+
+              // occasional stalagmite (but correct origin from floor)
+              if (Math.random() < 0.25) {
+                const len2 = 2 + Math.random()*3;
+                for (let k = 0; k < len2; k++) {
+                  seg.blocks.push(new Block(
+                    cx + (Math.random()-.5)*0.8, // minor offset
+                    "stull",
+                    1.2,
+                    -6.5 + zOff + k*0.9,
+                    1.0
+                  ));
+                }
+              }
+            }
+          }
+        }
+
+
+        if (!P && !B) {
+          if (i%STULL_STEP===0) {
+            seg.blocks.push(new Block(-6,"stull",1.5,5,14));
+            seg.blocks.push(new Block( 6,"stull",1.5,5,14));
+          }
+          if (i%STULL_HORIZ_STEP===0) {
+            seg.blocks.push(new Block(0,"stull",17,8,3));
+          }
+        }
+
+        if (seg.lightPhase===0) {
+          seg.blocks.push(new Block(0,"cord",0.2,R+zOff,R+zOff-5));
+          seg.blocks.push(new Block(0,"bulb",0.6,5,0.6));
+        }
+      }
+
+      // rails + lower sleeper
+      if (i%RAILS_STEP===0) {
+        // rails
+        seg.blocks.push(new Block(-2,"rail",0.5,-6.5,0.6));
+        seg.blocks.push(new Block( 2,"rail",0.5,-6.5,0.6));
+        // sleeper every 20 units under rails
+        if (i % 40 === 0) {
+
+          if (B) {
+            // --- irregular sleepers in round cave ---
+            if (Math.random() > 0.2) { // some missing
+              const width  = 12 + Math.random()*6;         // 12–18 wide
+              const height = 1.2 + Math.random()*1.5;      // 1.2–2.7 thick
+              const xshift = (Math.random()-.5) * 4;       // slight left/right drift
+              const yshift = (Math.random()-.5) * 1.2;     // slight height randomization
+              seg.blocks.push(new Block(xshift,"stull",
+                width, -6.5 + yshift, height
+              ));
+            }
+
+          } else {
+            // --- flat sections with proper supports ---
+            seg.blocks.push(new Block(0,"stull",17,-6.8,1.5)); // regular sleeper
+          }
+        }
+      }
+
+      // if (i%RAILS_STEP===0) {
+      //   seg.blocks.push(new Block(-2,"rail",0.5,-6.5,0.6));
+      //   seg.blocks.push(new Block( 2,"rail",0.5,-6.5,0.6));
+      // }
+    }
+    lastGen = target;
+  }
+
+  // Material brightness definitions
+  const MATERIAL = {
+    wall:  [10, 110],  // [dark, light]
+    stull: [60, 140],
+    rail:  [120,160],  // rails highly visible
+    cord:  [30, 80],
+    bulb:  [150,255]   // bulbs very bright
+  };
+
+  function shade(material, light, fog, b, seg, dx, dy, segIndex) {
+
+    const [lo,hi] = MATERIAL[material] || [50,150];
+
+    // --- Bulb special case (unchanged) ---
+    if (material === "bulb") {
+      light += 0.7;
+    }
+
+    let L = lo + light*(hi-lo);
+
+    if (material === "stull") {
+        // moderate base brightness + bulb contribution
+        const ambient = 0.25; // was too low
+        let lit = ambient + seg.light * 1.6;
+        if (lit > 1) lit = 1;
+
+        // slight darkening near floor (but not too much)
+        const floorFactor = Math.max(0, 1 - (b.y + 10) / 20);
+        lit *= (1 - 0.25 * floorFactor);
+
+        L = lo + lit * (hi - lo);
+    }
+    
+    if (material === "wall") {
+
+      // base very dark rock
+      L = lo;
+
+      const BULB_RADIUS = 200; // Try 200–350 for visible taper
+      let maxLight = 0;
+
+      for (let k = segIndex - BULB_RADIUS; k <= segIndex + BULB_RADIUS; k++) {
+        if (k < 0) continue;
+
+        const near = segments[k % HORIZON_STEPS];
+        if (!near.hasBulb || near.lightBroken) continue;
+
+        const dd = Math.abs(k - segIndex);
+        const falloff = 1 - dd / BULB_RADIUS;
+        if (falloff > maxLight) maxLight = falloff;
+      }
+
+      // Brighten based on bulb falloff
+      L += maxLight * (hi - lo);
+
+      // // smoother light fade across segments
+      // const sigma = LIGHT_PERIOD * 0.35; // adjustable
+      // const diff = seg.light; // already gaussian
+
+      // // brightness mostly from bulb + small ambient
+      // L = lo + diff * (hi - lo) * 1.6;
+
+
+      // Depth fog — kept mild
+      //L *= (1 - fog * 0.35);
+    }
+
+    // if (material === "wall") {
+      
+    //   // smooth gaussian light falloff along tunnel
+    //   const sigma = LIGHT_PERIOD * 0.35;
+    //   let diff = seg.light; // already gaussian from generation
+
+    //   // walls: very dark base + smooth bulb lighting
+    //   L = lo + diff * (hi - lo) * 1.6;
+
+    //   // vertical bands (sediment layers)
+    //   const stripe = Math.sin(b.y * 0.4 + (seg.noise1||0)) * 0.10;
+
+    //   // horizontal cracks / texture
+    //   const patch = Math.sin(b.x * 0.7 + (seg.noise2||0)) * 0.08;
+
+    //   // combine: subtle only in lighted areas
+    //   L *= (1 + stripe + patch * diff);
+
+    //   // brighter near bulb down-light
+    //   const heightFactor = Math.max(0, (b.y + 8) / 20);
+    //   L *= (0.8 + 0.2 * heightFactor);
+    // }
+
+
+
+    // fog — but not overpowering
+    L *= (1 - fog * 0.6);
+
+    return Math.max(0, Math.min(255, L|0));
+  }
+
+  function drawSegment(i) {
+    const d = i - cart;
+    if (d <= 0) return;
+
+    const seg = segments[i % HORIZON_STEPS];
+    const base= segments[cart % HORIZON_STEPS];
+
+    const f = half/(d/12+3);
+
+    const dx = seg.x-base.x - d*base.xv;
+    const dy = seg.y-base.y - d*base.yv;
+
+    const sxC = half + f*dx/3000;
+    const syC = half + f*dy/3000;
+
+    const fog = Math.min(1, d/1000); // deeper fog curve
+
+    if (!seg.noise) seg.noise = 0;
+
+    for (const b of seg.blocks) {
+      const L = shade(b.material, seg.light, fog, b, seg, dx, dy, i);
+
+
+      seg.hasBulb = (seg.lightPhase === 0);
+
+
+      ctx.fillStyle = `rgb(${L},${L},${L})`;
+
+      const x = sxC + f*b.x - (f*b.w)/2;
+      const y = syC - f*b.y;
+      ctx.fillRect(x,y,f*b.w,f*b.h);
+    }
+  }
+
+  function render() {
+    ctx.fillStyle="black";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    for (let i=lastGen-1; i>=cart; i--) drawSegment(i);
+  }
+
+  function step() {
+    if (cart + HORIZON_STEPS > lastGen - 200)
+      generate(cart + HORIZON_STEPS);
+
+    const seg = segments[cart % HORIZON_STEPS];
+    cartF += 4 + seg.y/30000;
+    cart = cartF|0;
+
+    render();
+    requestAnimationFrame(step);
+  }
+
+  generate(HORIZON_STEPS);
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>

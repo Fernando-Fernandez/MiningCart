@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Mine Cart Tracks - Live Edit</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: black;
+  }
+  #container {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+  }
+  #c {
+    width: 50vw;
+    height: 100vh;
+    display: block;
+    background: black;
+  }
+  #editor {
+    width: 50vw;
+    height: 100vh;
+    background: #111;
+    color: #ddd;
+    font-family: monospace;
+    font-size: 14px;
+    border: none;
+    outline: none;
+    padding: 8px;
+    resize: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="container">
+  <canvas id="c"></canvas>
+  <textarea id="editor"></textarea>
+</div>
+
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const editor = document.getElementById("editor");
+const CODE_PREFIX = `(function () {
+  "use strict";
+`;
+const CODE_SUFFIX = '\n})();';
+
+function resize() {
+  canvas.width  = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+editor.value = `
+// Core tunnel parameters (feel free to tweak for different vibes)
+const HORIZON_STEPS = 1080;
+const SECTION_LENGTH = 180;
+const CART_SPEED = 1.1;
+const TRACK_SPACING = 4.2;
+const TIE_STEP = 48;
+const ROCK_RING_COUNT = 26;
+const TUNNEL_RADIUS = 22;
+const ROCK_JITTER = 4;
+
+const canvas = c;
+const context = ctx;
+
+let half = 0;
+let horizonY = 0;
+
+function resizeTunnel() {
+  // Keep the perspective square-ish regardless of viewport
+  canvas.width = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+  half = canvas.width / 2;
+  horizonY = canvas.height * 0.45;
+}
+
+resizeTunnel();
+window.addEventListener("resize", resizeTunnel);
+
+class Segment {
+  constructor() {
+    // Track frame-to-frame offsets plus precomputed geometry
+    this.x = 0;
+    this.xVel = 0;
+    this.y = 0;
+    this.yVel = 0;
+    this.hasTie = false;
+    this.rockSlices = [];
+  }
+}
+
+const segments = Array.from({ length: HORIZON_STEPS }, () => new Segment());
+
+let lastGen = 0;
+let cartFloat = 0;
+let cart = 0;
+let targetCurve = 0;
+let targetSlope = 0;
+let trackX = 0;
+let trackXVel = 0;
+let trackY = 0;
+let trackYVel = 0;
+
+function pickNewTargets() {
+  // Smoothly wander the tunnel left/right and up/down
+  targetCurve = (Math.random() - 0.5) * 0.012;
+  targetSlope = (Math.random() - 0.5) * 0.008;
+}
+
+// Create / extend all tunnel segments up to target
+function generate(target) {
+  for (let i = lastGen; i < target; i++) {
+    // Every new section picks a fresh direction bias
+    if (i % SECTION_LENGTH === 0) {
+      pickNewTargets();
+    }
+
+    // Ease velocities toward the chosen curve/slope so motion feels smooth
+    trackXVel += (targetCurve - trackXVel) * 0.05;
+    trackYVel += (targetSlope - trackYVel) * 0.08;
+
+    trackX += trackXVel * 400;
+    trackY += trackYVel * 120;
+
+    const seg = segments[i % HORIZON_STEPS];
+    seg.x = trackX;
+    seg.xVel = trackXVel * 400;
+    seg.y = trackY;
+    seg.yVel = trackYVel * 120;
+    seg.hasTie = (i % TIE_STEP === 0);
+    seg.rockSlices.length = 0;
+
+    // Build a ring of noisy rectangles to fake rocky ceiling
+    const baseWarp = Math.sin(i * 0.035) * 2;
+    for (let s = 0; s < ROCK_RING_COUNT; s++) {
+      const angle = (s / ROCK_RING_COUNT) * Math.PI * 2;
+      const roughness = Math.sin(i * 0.08 + s * 0.9) * 2 +
+                        Math.cos(i * 0.05 + s * 1.3) * 1.5;
+      const radius = TUNNEL_RADIUS + roughness + baseWarp;
+      const jitter = (Math.random() - 0.5) * ROCK_JITTER;
+      const shade = 25 + Math.random() * 45;
+      seg.rockSlices.push({
+        angle,
+        radius: radius + jitter,
+        shade
+      });
+    }
+  }
+  lastGen = target;
+}
+
+// Project a single segment to screen space and paint it
+function drawSegment(i) {
+  const d = i - cart;
+  if (d <= 0) return;
+
+  const seg = segments[i % HORIZON_STEPS];
+  const base = segments[cart % HORIZON_STEPS];
+
+  const scale = half / (d * 0.07 + 2.5); // simple perspective shrink
+  const dx = seg.x - base.x - d * base.xVel;
+  const dy = seg.y - base.y - d * base.yVel;
+
+  const centerX = half + (dx * scale) / 6000;
+  const centerY = horizonY + (dy * scale) / 8000;
+  const fog = Math.min(1, d / (HORIZON_STEPS * 0.9));
+  const depthScaleX = scale * 0.06;
+  const depthScaleY = scale * 0.04;
+
+  const railWidth = Math.max(1, scale * 0.8);
+  const railHeight = Math.max(2, scale * 16);
+  const spacing = scale * TRACK_SPACING;
+
+  // Ceiling rocks (drawn before the rails to keep depth ordering)
+  for (const slice of seg.rockSlices) {
+    const rockX = Math.sin(slice.angle) * slice.radius;
+    const rockY = Math.cos(slice.angle) * slice.radius * 0.7;
+    const x = centerX + rockX * depthScaleX;
+    const y = centerY - rockY * depthScaleY - scale * 6;
+    const width = Math.max(2, scale * 0.45 + slice.radius * 0.05);
+    const height = Math.max(4, scale * 2 + slice.radius * 0.2);
+    const shade = (slice.shade * (1 - fog * 0.7)) | 0;
+    context.fillStyle = 'rgb(' + shade + ',' + shade + ',' + shade + ')';
+    context.fillRect(x - width / 2, y, width, height);
+  }
+
+  context.fillStyle = "#373737";
+  context.fillRect(centerX - spacing - railWidth / 2, centerY, railWidth, railHeight);
+  context.fillRect(centerX + spacing - railWidth / 2, centerY, railWidth, railHeight);
+
+  if (seg.hasTie) {
+    const tieWidth = spacing * 2.4 + railWidth;
+    const tieHeight = Math.max(1, scale * 0.9);
+    context.fillStyle = "#c0c0c0";
+    context.fillRect(centerX - tieWidth / 2, centerY + railHeight - tieHeight * 2, tieWidth, tieHeight);
+  }
+}
+
+function render() {
+  // Simple clear + horizon split
+  context.fillStyle = "black";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "black";
+  context.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
+
+  for (let i = lastGen - 1; i >= cart; i--) {
+    drawSegment(i);
+  }
+}
+
+function scheduleNextFrame() {
+  return requestAnimationFrame(step);
+}
+
+function step() {
+  if (cart + HORIZON_STEPS > lastGen - 150) {
+    generate(cart + HORIZON_STEPS);
+  }
+
+  const seg = segments[cart % HORIZON_STEPS];
+  // Speed changes slightly with slope for a bit of life
+  cartFloat += CART_SPEED + seg.yVel * 0.04;
+  cart = cartFloat | 0;
+
+  render();
+  scheduleNextFrame();
+}
+
+generate(HORIZON_STEPS);
+return scheduleNextFrame();
+`;
+
+let currentRAF = null;
+
+function runLiveCode() {
+  if (currentRAF !== null) {
+    cancelAnimationFrame(currentRAF);
+    currentRAF = null;
+  }
+
+  resize();
+
+  try {
+    const wrappedCode = CODE_PREFIX + editor.value + CODE_SUFFIX;
+    currentRAF = new Function("c","ctx", wrappedCode)(canvas, ctx) || null;
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+let debounceTimer;
+editor.addEventListener("input", () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(runLiveCode, 200);
+});
+
+runLiveCode();
+</script>
+
+</body>
+</html>
