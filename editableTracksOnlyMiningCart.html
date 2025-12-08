@@ -66,14 +66,14 @@ const CART_SPEED = 0.5;
 const TRACK_SPACING = 4.2;
 const TIE_STEP = 48;
 const CAVE_SLICES = 40;
-const CAVE_RADIUS_X = 54;
+const CAVE_RADIUS_X = 64;
 const CAVE_RADIUS_Y = 84;
-const CAVE_JITTER = 4;
+const CAVE_JITTER = 8;
 const MAX_SLOPE = 4;//Math.tan(Math.PI / 6); // allow ~30 degree pitch
-const CURVE_RANGE = 1;
+const CURVE_RANGE = 3;
 const SPEED_SLOPE_FACTOR = 0.5;
-const MIN_FORWARD_SPEED = 2;
-const MAX_FORWARD_SPEED = 4;
+const MIN_FORWARD_SPEED = 1.5;
+const MAX_FORWARD_SPEED = 3;
 
 const canvas = c;
 const context = ctx;
@@ -157,8 +157,8 @@ function generate(target) {
         angle,
         radiusX,
         radiusY,
-        width: 0.4 + Math.random() * 0.5,
-        height: 0.2 + Math.random() * 0.2,
+        width: 0.8 + Math.random() * 0.5,
+        height: 0.4 + Math.random() * 0.2,
         shade: 60 + Math.random() * 80
       });
     }
