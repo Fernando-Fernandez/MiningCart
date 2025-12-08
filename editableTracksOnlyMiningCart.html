@@ -60,14 +60,20 @@ window.addEventListener("resize", resize);
 
 editor.value = `
 // Core tunnel parameters (feel free to tweak for different vibes)
-const HORIZON_STEPS = 1080;
-const SECTION_LENGTH = 180;
-const CART_SPEED = 1.1;
+const HORIZON_STEPS = 1000;
+const SECTION_LENGTH = 150;
+const CART_SPEED = 0.5;
 const TRACK_SPACING = 4.2;
 const TIE_STEP = 48;
-const ROCK_RING_COUNT = 26;
-const TUNNEL_RADIUS = 22;
-const ROCK_JITTER = 4;
+const CAVE_SLICES = 40;
+const CAVE_RADIUS_X = 54;
+const CAVE_RADIUS_Y = 84;
+const CAVE_JITTER = 4;
+const MAX_SLOPE = 4;//Math.tan(Math.PI / 6); // allow ~30 degree pitch
+const CURVE_RANGE = 1;
+const SPEED_SLOPE_FACTOR = 0.5;
+const MIN_FORWARD_SPEED = 2;
+const MAX_FORWARD_SPEED = 4;
 
 const canvas = c;
 const context = ctx;
@@ -94,7 +100,7 @@ class Segment {
     this.y = 0;
     this.yVel = 0;
     this.hasTie = false;
-    this.rockSlices = [];
+    this.caveRects = [];
   }
 }
 
@@ -112,8 +118,8 @@ let trackYVel = 0;
 
 function pickNewTargets() {
   // Smoothly wander the tunnel left/right and up/down
-  targetCurve = (Math.random() - 0.5) * 0.012;
-  targetSlope = (Math.random() - 0.5) * 0.008;
+  targetCurve = (Math.random() - 0.5) * CURVE_RANGE;
+  targetSlope = (Math.random() - 0.5) * 2 * MAX_SLOPE;
 }
 
 // Create / extend all tunnel segments up to target
@@ -126,10 +132,11 @@ function generate(target) {
 
     // Ease velocities toward the chosen curve/slope so motion feels smooth
     trackXVel += (targetCurve - trackXVel) * 0.05;
-    trackYVel += (targetSlope - trackYVel) * 0.08;
+    trackYVel += (targetSlope - trackYVel) * 0.2;
+    trackYVel = Math.max(-MAX_SLOPE, Math.min(MAX_SLOPE, trackYVel));
 
     trackX += trackXVel * 400;
-    trackY += trackYVel * 120;
+    trackY += trackYVel * 80;
 
     const seg = segments[i % HORIZON_STEPS];
     seg.x = trackX;
@@ -137,21 +144,22 @@ function generate(target) {
     seg.y = trackY;
     seg.yVel = trackYVel * 120;
     seg.hasTie = (i % TIE_STEP === 0);
-    seg.rockSlices.length = 0;
+    seg.caveRects.length = 0;
 
-    // Build a ring of noisy rectangles to fake rocky ceiling
-    const baseWarp = Math.sin(i * 0.035) * 2;
-    for (let s = 0; s < ROCK_RING_COUNT; s++) {
-      const angle = (s / ROCK_RING_COUNT) * Math.PI * 2;
-      const roughness = Math.sin(i * 0.08 + s * 0.9) * 2 +
-                        Math.cos(i * 0.05 + s * 1.3) * 1.5;
-      const radius = TUNNEL_RADIUS + roughness + baseWarp;
-      const jitter = (Math.random() - 0.5) * ROCK_JITTER;
-      const shade = 25 + Math.random() * 45;
-      seg.rockSlices.push({
+    // Populate an ellipse of rectangles to fake the cave shell
+    const wobble = Math.sin(i * 0.05) * 2;
+    for (let s = 0; s < CAVE_SLICES; s++) {
+      const angle = (s / CAVE_SLICES) * Math.PI * 2;
+      const radialJitter = (Math.random() - 0.5) * CAVE_JITTER;
+      const radiusX = CAVE_RADIUS_X + wobble + radialJitter;
+      const radiusY = CAVE_RADIUS_Y + Math.cos(i * 0.08 + s) * 2 + radialJitter * 0.5;
+      seg.caveRects.push({
         angle,
-        radius: radius + jitter,
-        shade
+        radiusX,
+        radiusY,
+        width: 0.4 + Math.random() * 0.5,
+        height: 0.2 + Math.random() * 0.2,
+        shade: 60 + Math.random() * 80
       });
     }
   }
@@ -167,50 +175,52 @@ function drawSegment(i) {
   const base = segments[cart % HORIZON_STEPS];
 
   const scale = half / (d * 0.07 + 2.5); // simple perspective shrink
+
   const dx = seg.x - base.x - d * base.xVel;
-  const dy = seg.y - base.y - d * base.yVel;
+  const dy = seg.y - base.y;
 
   const centerX = half + (dx * scale) / 6000;
-  const centerY = horizonY + (dy * scale) / 8000;
+  const centerY = horizonY + (dy * scale) / 6000; // shrink denominator a bit
+
   const fog = Math.min(1, d / (HORIZON_STEPS * 0.9));
   const depthScaleX = scale * 0.06;
-  const depthScaleY = scale * 0.04;
+  const depthScaleY = scale * 0.06; // was 0.04
 
   const railWidth = Math.max(1, scale * 0.8);
   const railHeight = Math.max(2, scale * 16);
   const spacing = scale * TRACK_SPACING;
 
-  // Ceiling rocks (drawn before the rails to keep depth ordering)
-  for (const slice of seg.rockSlices) {
-    const rockX = Math.sin(slice.angle) * slice.radius;
-    const rockY = Math.cos(slice.angle) * slice.radius * 0.7;
-    const x = centerX + rockX * depthScaleX;
-    const y = centerY - rockY * depthScaleY - scale * 6;
-    const width = Math.max(2, scale * 0.45 + slice.radius * 0.05);
-    const height = Math.max(4, scale * 2 + slice.radius * 0.2);
-    const shade = (slice.shade * (1 - fog * 0.7)) | 0;
+  // Cave shell as a loose ellipse of uneven rectangles
+  for (const rect of seg.caveRects) {
+    const ellX = Math.sin(rect.angle) * rect.radiusX;
+    const ellY = Math.cos(rect.angle) * rect.radiusY;
+    const x = centerX + ellX * depthScaleX * 1.4;
+    const y = centerY - ellY * depthScaleY;
+    const width = Math.max(2, scale * rect.width + rect.radiusX * 0.05);
+    const height = Math.max(4, scale * rect.height + rect.radiusY * 0.15);
+    const shade = (rect.shade * (1 - fog * 0.6)) | 0;
     context.fillStyle = 'rgb(' + shade + ',' + shade + ',' + shade + ')';
     context.fillRect(x - width / 2, y, width, height);
   }
 
-  context.fillStyle = "#373737";
-  context.fillRect(centerX - spacing - railWidth / 2, centerY, railWidth, railHeight);
-  context.fillRect(centerX + spacing - railWidth / 2, centerY, railWidth, railHeight);
+  //context.fillStyle = "#373737";
+  //context.fillRect(centerX - spacing - railWidth / 2, centerY, railWidth, railHeight);
+  //context.fillRect(centerX + spacing - railWidth / 2, centerY, railWidth, railHeight);
 
-  if (seg.hasTie) {
-    const tieWidth = spacing * 2.4 + railWidth;
-    const tieHeight = Math.max(1, scale * 0.9);
-    context.fillStyle = "#c0c0c0";
-    context.fillRect(centerX - tieWidth / 2, centerY + railHeight - tieHeight * 2, tieWidth, tieHeight);
-  }
+  //if (seg.hasTie) {
+  //  const tieWidth = spacing * 2.4 + railWidth;
+  //  const tieHeight = Math.max(1, scale * 0.9);
+  //  context.fillStyle = "#c0c0c0";
+  //  context.fillRect(centerX - tieWidth / 2, centerY + railHeight - tieHeight * 2, tieWidth, tieHeight);
+  //}
 }
 
 function render() {
   // Simple clear + horizon split
   context.fillStyle = "black";
   context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "black";
-  context.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
+  //context.fillStyle = "black";
+  //context.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
 
   for (let i = lastGen - 1; i >= cart; i--) {
     drawSegment(i);
@@ -228,7 +238,9 @@ function step() {
 
   const seg = segments[cart % HORIZON_STEPS];
   // Speed changes slightly with slope for a bit of life
-  cartFloat += CART_SPEED + seg.yVel * 0.04;
+  const slopeBoost = seg.yVel * SPEED_SLOPE_FACTOR;
+  const forwardStep = Math.max(MIN_FORWARD_SPEED, Math.min(MAX_FORWARD_SPEED, CART_SPEED + slopeBoost));
+  cartFloat += forwardStep;
   cart = cartFloat | 0;
 
   render();
