@@ -55,10 +55,12 @@
 </style>
 </head>
 <body>
+  <!-- <script src="https://unpkg.com/@strudel/web@latest"></script> -->
 
 <div id="toolbar">
   <button id="pauseBtn">Pause</button>
   <button id="restartBtn">Restart</button>
+  <!-- <button id="soundBtn">Sound</button> -->
 </div>
 
 <div id="container">
@@ -72,6 +74,7 @@ const ctx = canvas.getContext("2d");
 const editor = document.getElementById("editor");
 const pauseBtn = document.getElementById("pauseBtn");
 const restartBtn = document.getElementById("restartBtn");
+//const soundBtn = document.getElementById("soundBtn");
 const CODE_PREFIX = `(function () {
   "use strict";
   const __hooks = arguments[2] || {};
@@ -449,6 +452,12 @@ pauseBtn.addEventListener("click", () => {
 restartBtn.addEventListener("click", () => {
   runLiveCode();
 });
+
+//soundBtn.addEventListener("click", () => {
+//  initStrudel();
+//
+//  note('<c a f d#>(3,8)').scale('G4:minor').jux(rev).room(2).sometimes(add(note("g"))).lpf(perlin.range(200,20000).slow(4)).play();
+//});
 
 runLiveCode();
 </script>
