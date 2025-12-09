@@ -10,6 +10,25 @@
     overflow: hidden;
     background: black;
   }
+  #toolbar {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 10;
+    display: flex;
+    gap: 8px;
+  }
+  #toolbar button {
+    background: #222;
+    color: #f2f2f2;
+    border: 1px solid #555;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #toolbar button:hover {
+    background: #333;
+  }
   #container {
     display: flex;
     width: 100vw;
@@ -37,6 +56,11 @@
 </head>
 <body>
 
+<div id="toolbar">
+  <button id="pauseBtn">Pause</button>
+  <button id="restartBtn">Restart</button>
+</div>
+
 <div id="container">
   <canvas id="c"></canvas>
   <textarea id="editor"></textarea>
@@ -46,10 +70,128 @@
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const editor = document.getElementById("editor");
+const pauseBtn = document.getElementById("pauseBtn");
+const restartBtn = document.getElementById("restartBtn");
 const CODE_PREFIX = `(function () {
   "use strict";
+  const __hooks = arguments[2] || {};
+  const requestAnimationFrame = __hooks.requestAnimationFrame || window.requestAnimationFrame.bind(window);
+  const cancelAnimationFrame = __hooks.cancelAnimationFrame || window.cancelAnimationFrame.bind(window);
 `;
 const CODE_SUFFIX = '\n})();';
+
+function createAnimationController() {
+  const nativeRAF = window.requestAnimationFrame.bind(window);
+  const nativeCancel = window.cancelAnimationFrame.bind(window);
+  let paused = false;
+  let nextHandle = 1;
+  const entries = new Map();
+  let prevRAF = null;
+  let prevCancel = null;
+
+  function schedule(handle) {
+    const entry = entries.get(handle);
+    if (!entry || entry.cancelled) return;
+    entry.pending = false;
+    entry.nativeHandle = nativeRAF((ts) => {
+      entry.nativeHandle = null;
+      if (paused || entry.cancelled) {
+        entry.pending = true;
+        return;
+      }
+      entries.delete(handle);
+      entry.callback(ts);
+    });
+  }
+
+  function requestFrame(cb) {
+    const handle = nextHandle++;
+    entries.set(handle, {
+      callback: cb,
+      nativeHandle: null,
+      cancelled: false,
+      pending: false
+    });
+    if (!paused) schedule(handle);
+    else entries.get(handle).pending = true;
+    return handle;
+  }
+
+  function cancelFrame(handle) {
+    const entry = entries.get(handle);
+    if (!entry) return;
+    entry.cancelled = true;
+    if (entry.nativeHandle !== null) {
+      nativeCancel(entry.nativeHandle);
+    }
+    entries.delete(handle);
+  }
+
+  function pause() {
+    if (paused) return;
+    paused = true;
+    for (const entry of entries.values()) {
+      if (entry.nativeHandle !== null) {
+        nativeCancel(entry.nativeHandle);
+        entry.nativeHandle = null;
+      }
+      entry.pending = true;
+    }
+  }
+
+  function resume() {
+    if (!paused) return;
+    paused = false;
+    for (const [handle, entry] of entries) {
+      if (!entry.cancelled && (entry.pending || entry.nativeHandle === null)) {
+        entry.pending = false;
+        schedule(handle);
+      }
+    }
+  }
+
+  function dispose() {
+    for (const [handle, entry] of entries) {
+      if (entry.nativeHandle !== null) {
+        nativeCancel(entry.nativeHandle);
+      }
+    }
+    entries.clear();
+    paused = false;
+    restoreGlobals();
+  }
+
+  function installGlobals() {
+    if (prevRAF !== null) return;
+    prevRAF = window.requestAnimationFrame;
+    prevCancel = window.cancelAnimationFrame;
+    window.requestAnimationFrame = requestFrame;
+    window.cancelAnimationFrame = cancelFrame;
+  }
+
+  function restoreGlobals() {
+    if (prevRAF === null) return;
+    window.requestAnimationFrame = prevRAF;
+    window.cancelAnimationFrame = prevCancel;
+    prevRAF = null;
+    prevCancel = null;
+  }
+
+  return {
+    hooks: {
+      requestAnimationFrame: requestFrame,
+      cancelAnimationFrame: cancelFrame
+    },
+    pause,
+    resume,
+    dispose,
+    isPaused: () => paused,
+    installGlobals,
+    restoreGlobals
+  };
+}
+
+let animationController = null;
 
 function resize() {
   canvas.width  = canvas.clientWidth;
@@ -73,7 +215,7 @@ const MAX_SLOPE = 4;//Math.tan(Math.PI / 6); // allow ~30 degree pitch
 const CURVE_RANGE = 3;
 const SPEED_SLOPE_FACTOR = 0.5;
 const MIN_FORWARD_SPEED = 1.5;
-const MAX_FORWARD_SPEED = 3;
+const MAX_FORWARD_SPEED = 2;
 
 const canvas = c;
 const context = ctx;
@@ -227,45 +369,45 @@ function render() {
   }
 }
 
-function scheduleNextFrame() {
-  return requestAnimationFrame(step);
-}
-
 function step() {
   if (cart + HORIZON_STEPS > lastGen - 150) {
     generate(cart + HORIZON_STEPS);
   }
 
   const seg = segments[cart % HORIZON_STEPS];
-  // Speed changes slightly with slope for a bit of life
   const slopeBoost = seg.yVel * SPEED_SLOPE_FACTOR;
   const forwardStep = Math.max(MIN_FORWARD_SPEED, Math.min(MAX_FORWARD_SPEED, CART_SPEED + slopeBoost));
   cartFloat += forwardStep;
   cart = cartFloat | 0;
 
   render();
-  scheduleNextFrame();
+  requestAnimationFrame(step);
 }
 
 generate(HORIZON_STEPS);
-return scheduleNextFrame();
+requestAnimationFrame(step);
 `;
 
-let currentRAF = null;
+function disposeAnimationController() {
+  if (animationController) {
+    animationController.dispose();
+    animationController = null;
+  }
+}
 
 function runLiveCode() {
-  if (currentRAF !== null) {
-    cancelAnimationFrame(currentRAF);
-    currentRAF = null;
-  }
-
+  disposeAnimationController();
   resize();
 
   try {
     const wrappedCode = CODE_PREFIX + editor.value + CODE_SUFFIX;
-    currentRAF = new Function("c","ctx", wrappedCode)(canvas, ctx) || null;
+    animationController = createAnimationController();
+    animationController.installGlobals();
+    new Function("c","ctx","hooks", wrappedCode)(canvas, ctx, animationController.hooks);
+    pauseBtn.textContent = "Pause";
   } catch (e) {
     console.error(e);
+    disposeAnimationController();
   }
 }
 
@@ -273,6 +415,21 @@ let debounceTimer;
 editor.addEventListener("input", () => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(runLiveCode, 200);
+});
+
+pauseBtn.addEventListener("click", () => {
+  if (!animationController) return;
+  if (animationController.isPaused()) {
+    animationController.resume();
+    pauseBtn.textContent = "Pause";
+  } else {
+    animationController.pause();
+    pauseBtn.textContent = "Resume";
+  }
+});
+
+restartBtn.addEventListener("click", () => {
+  runLiveCode();
 });
 
 runLiveCode();
