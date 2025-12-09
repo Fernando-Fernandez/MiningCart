@@ -251,8 +251,11 @@ const segments = Array.from({ length: HORIZON_STEPS }, () => new Segment());
 let lastGen = 0;
 let cartFloat = 0;
 let cart = 0;
-let targetCurve = 0;
-let targetSlope = 0;
+let prevCurveTarget = 0;
+let nextCurveTarget = 0;
+let prevSlopeTarget = 0;
+let nextSlopeTarget = 0;
+let sectionProgress = 1;
 let trackX = 0;
 let trackXVel = 0;
 let trackY = 0;
@@ -260,8 +263,24 @@ let trackYVel = 0;
 
 function pickNewTargets() {
   // Smoothly wander the tunnel left/right and up/down
-  targetCurve = (Math.random() - 0.5) * CURVE_RANGE;
-  targetSlope = (Math.random() - 0.5) * 2 * MAX_SLOPE;
+  prevCurveTarget = nextCurveTarget;
+  prevSlopeTarget = nextSlopeTarget;
+  nextCurveTarget = (Math.random() - 0.5) * CURVE_RANGE;
+  nextSlopeTarget = (Math.random() - 0.5) * 2 * MAX_SLOPE;
+  sectionProgress = 0;
+}
+
+function smoothStep(t) {
+  const clamped = Math.max(0, Math.min(1, t));
+  return clamped * clamped * (3 - 2 * clamped);
+}
+
+function blendedCurve() {
+  return prevCurveTarget + (nextCurveTarget - prevCurveTarget) * smoothStep(sectionProgress);
+}
+
+function blendedSlope() {
+  return prevSlopeTarget + (nextSlopeTarget - prevSlopeTarget) * smoothStep(sectionProgress);
 }
 
 // Create / extend all tunnel segments up to target
@@ -271,10 +290,11 @@ function generate(target) {
     if (i % SECTION_LENGTH === 0) {
       pickNewTargets();
     }
+    sectionProgress += 1 / SECTION_LENGTH;
 
     // Ease velocities toward the chosen curve/slope so motion feels smooth
-    trackXVel += (targetCurve - trackXVel) * 0.015;
-    trackYVel += (targetSlope - trackYVel) * 0.2;
+    trackXVel += (blendedCurve() - trackXVel) * 0.015;
+    trackYVel += (blendedSlope() - trackYVel) * 0.2;
     trackYVel = Math.max(-MAX_SLOPE, Math.min(MAX_SLOPE, trackYVel));
 
     trackX += trackXVel * 400;
@@ -288,7 +308,7 @@ function generate(target) {
     seg.hasTie = (i % TIE_STEP === 0);
     seg.caveRects.length = 0;
 
-    // Populate an ellipse of rectangles to fake the cave shell
+    // Populate an ellipse of rectangles to form the cave shell
     const wobble = Math.sin(i * 0.05) * 2;
     for (let s = 0; s < CAVE_SLICES; s++) {
       const angle = (s / CAVE_SLICES) * Math.PI * 2;
@@ -299,8 +319,8 @@ function generate(target) {
         angle,
         radiusX,
         radiusY,
-        width: 0.8 + Math.random() * 0.5,
-        height: 0.4 + Math.random() * 0.2,
+        width: 1.5,
+        height: 2,
         shade: 60 + Math.random() * 80
       });
     }
