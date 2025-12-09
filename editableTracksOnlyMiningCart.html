@@ -273,7 +273,7 @@ function generate(target) {
     }
 
     // Ease velocities toward the chosen curve/slope so motion feels smooth
-    trackXVel += (targetCurve - trackXVel) * 0.05;
+    trackXVel += (targetCurve - trackXVel) * 0.015;
     trackYVel += (targetSlope - trackYVel) * 0.2;
     trackYVel = Math.max(-MAX_SLOPE, Math.min(MAX_SLOPE, trackYVel));
 
@@ -361,8 +361,6 @@ function render() {
   // Simple clear + horizon split
   context.fillStyle = "black";
   context.fillRect(0, 0, canvas.width, canvas.height);
-  //context.fillStyle = "black";
-  //context.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
 
   for (let i = lastGen - 1; i >= cart; i--) {
     drawSegment(i);
