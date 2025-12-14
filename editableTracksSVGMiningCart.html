@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>SVG Tunnel - Live Edit</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: black;
+  }
+  #toolbar {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 10;
+    display: flex;
+    gap: 8px;
+  }
+  #toolbar button {
+    background: #222;
+    color: #f2f2f2;
+    border: 1px solid #555;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #container {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+  }
+  #view {
+    width: 50vw;
+    height: 100vh;
+    background: black;
+  }
+  #editor {
+    width: 50vw;
+    height: 100vh;
+    background: #111;
+    color: #ddd;
+    font-family: monospace;
+    font-size: 14px;
+    border: none;
+    outline: none;
+    padding: 8px;
+    resize: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button id="pauseBtn">Pause</button>
+  <button id="restartBtn">Restart</button>
+</div>
+
+<div id="container">
+  <svg id="view"></svg>
+  <textarea id="editor"></textarea>
+  <div id="errorBox"
+     style="position:fixed;top:0;right:0;background:#300;color:#f88;
+     padding:10px;font-family:monospace;z-index:9999;display:none"></div>
+
+</div>
+
+<script>
+const editor = document.getElementById("editor");
+const pauseBtn = document.getElementById("pauseBtn");
+const restartBtn = document.getElementById("restartBtn");
+const view = document.getElementById("view");
+
+function showError(e) {
+  const box = document.getElementById("errorBox");
+  box.style.display = "block";
+  box.textContent = e.stack || e;
+}
+
+function clearError() {
+  const box = document.getElementById("errorBox");
+  box.style.display = "none";
+  box.textContent = "";
+}
+
+
+const CODE_PREFIX = `((svg, hooks) => {
+"use strict";
+
+console.log("%c[WRAPPED FUNCTION START]", "color:cyan");
+
+console.log("arguments.length =", arguments.length);
+console.log("arguments =", arguments);
+
+console.log("svg =", svg);
+console.log("hooks =", hooks);
+
+if (!hooks) {
+  throw new Error("hooks is undefined — wrapper called with wrong signature");
+}
+
+const requestAnimationFrame = hooks.requestAnimationFrame;
+const cancelAnimationFrame = hooks.cancelAnimationFrame;
+
+try {
+`;
+
+const CODE_SUFFIX = `} catch(err) {
+   console.error("ERROR INSIDE USER CODE:", err);
+   showError(err);
+}
+})(svg, hooks);
+`;
+
+
+// ---------------------- ANIMATION CONTROLLER (unchanged) ---------------------
+function createAnimationController() {
+  const nativeRAF = window.requestAnimationFrame.bind(window);
+  const nativeCancel = window.cancelAnimationFrame.bind(window);
+  let paused = false;
+  let nextHandle = 1;
+  const entries = new Map();
+  let prevRAF = null, prevCancel = null;
+
+  function schedule(handle) {
+    const entry = entries.get(handle);
+    if (!entry || entry.cancelled) return;
+    entry.pending = false;
+    entry.nativeHandle = nativeRAF((ts) => {
+      entry.nativeHandle = null;
+      if (paused || entry.cancelled) {
+        entry.pending = true;
+        return;
+      }
+      entries.delete(handle);
+      entry.callback(ts);
+    });
+  }
+
+  function requestFrame(cb) {
+    const handle = nextHandle++;
+    entries.set(handle, {
+      callback: cb,
+      nativeHandle: null,
+      cancelled: false,
+      pending: false
+    });
+    if (!paused) schedule(handle);
+    else entries.get(handle).pending = true;
+    return handle;
+  }
+
+  function cancelFrame(handle) {
+    const entry = entries.get(handle);
+    if (!entry) return;
+    entry.cancelled = true;
+    if (entry.nativeHandle !== null) nativeCancel(entry.nativeHandle);
+    entries.delete(handle);
+  }
+
+  function pause() {
+    if (paused) return;
+    paused = true;
+    for (const entry of entries.values()) {
+      if (entry.nativeHandle !== null) nativeCancel(entry.nativeHandle);
+      entry.nativeHandle = null;
+      entry.pending = true;
+    }
+  }
+  function resume() {
+    if (!paused) return;
+    paused = false;
+    for (const [handle, entry] of entries) {
+      if (!entry.cancelled && entry.pending) {
+        entry.pending = false;
+        schedule(handle);
+      }
+    }
+  }
+  function dispose() {
+    for (const entry of entries.values()) {
+      if (entry.nativeHandle !== null) nativeCancel(entry.nativeHandle);
+    }
+    entries.clear();
+    paused = false;
+    restoreGlobals();
+  }
+
+  function installGlobals() {
+    if (prevRAF !== null) return;
+    prevRAF = window.requestAnimationFrame;
+    prevCancel = window.cancelAnimationFrame;
+    window.requestAnimationFrame = requestFrame;
+    window.cancelAnimationFrame = cancelFrame;
+  }
+  function restoreGlobals() {
+    if (!prevRAF) return;
+    window.requestAnimationFrame = prevRAF;
+    window.cancelAnimationFrame = prevCancel;
+    prevRAF = null;
+    prevCancel = null;
+  }
+
+  return { hooks:{requestAnimationFrame, cancelAnimationFrame}, pause, resume, dispose, isPaused:()=>paused, installGlobals, restoreGlobals };
+}
+
+let animationController = null;
+
+// ---------------------------------------------------------------------------
+// INITIAL EDITOR CONTENT — MINIMAL SVG TUNNEL DEMO
+// ---------------------------------------------------------------------------
+
+editor.value = `
+
+// --- SETTINGS ---
+const NS = "http://www.w3.org/2000/svg";
+const VIEW_SIZE = 900;
+const CENTER = VIEW_SIZE / 2;
+const LAYER_COUNT = 128;
+const Z_SPEED = 0.001;
+const FAR_RADIUS = 10;
+const NEAR_RADIUS = 660;
+const WALL_THICKNESS = 25;
+const PATH_MIN_FRAMES = 240;
+const PATH_MAX_FRAMES = 420;
+const PATH_RADIUS_MIN = 20;
+const PATH_RADIUS_MAX = 180;
+const DRIFT_RADIUS_MAX = 10;
+const MIN_DRIFT_BLEND = 0.52;
+
+// --- clear & prep root SVG ---
+svg.innerHTML = "";
+svg.setAttribute("viewBox", \`0 0 \${VIEW_SIZE} \${VIEW_SIZE}\`);
+svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+svg.setAttribute("width", "100%");
+svg.setAttribute("height", "100%");
+svg.style.background = "#020202";
+
+// each layer gets its own nested <svg>
+const layers = [];
+
+function donutPath(outerRadius, innerRadius) {
+  return \`
+    M -\${outerRadius},0
+    A \${outerRadius} \${outerRadius} 0 1 0 \${outerRadius},0
+    A \${outerRadius} \${outerRadius} 0 1 0 -\${outerRadius},0
+    M -\${innerRadius},0
+    A \${innerRadius} \${innerRadius} 0 1 1 \${innerRadius},0
+    A \${innerRadius} \${innerRadius} 0 1 1 -\${innerRadius},0
+  \`;
+}
+
+function buildRing(fill = "hsl(0,0%,20%)") {
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("fill-rule", "evenodd");
+  path.setAttribute("fill", fill);
+  path.setAttribute("stroke", "hsl(35,30%,25%)");
+  path.setAttribute("stroke-width", "1.5");
+  path.setAttribute("vector-effect", "non-scaling-stroke");
+  path.setAttribute("transform", \`translate(\${CENTER},\${CENTER})\`);
+  path.setAttribute("d", donutPath(NEAR_RADIUS, NEAR_RADIUS - WALL_THICKNESS));
+  return path;
+}
+
+function randomVector(minRadius, maxRadius) {
+  const angle = Math.random() * Math.PI * 2;
+  const radius = minRadius + Math.random() * (maxRadius - minRadius);
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius
+  };
+}
+
+function randomDrift() {
+  return randomVector(0, DRIFT_RADIUS_MAX);
+}
+
+function resetDrift(layer) {
+  layer.pathX = pathOffsetX;
+  layer.pathY = pathOffsetY;
+  const drift = randomDrift();
+  layer.driftX = drift.x;
+  layer.driftY = drift.y;
+}
+
+let pathOffsetX = 0;
+let pathOffsetY = 0;
+let pathStartX = 0;
+let pathStartY = 0;
+let pathTargetX = 0;
+let pathTargetY = 0;
+let pathProgress = 1;
+let pathDuration = 1;
+
+function scheduleNextPath() {
+  const next = randomVector(PATH_RADIUS_MIN, PATH_RADIUS_MAX);
+  pathStartX = pathOffsetX;
+  pathStartY = pathOffsetY;
+  pathTargetX = next.x;
+  pathTargetY = next.y;
+  pathProgress = 0;
+  pathDuration = PATH_MIN_FRAMES + Math.random() * (PATH_MAX_FRAMES - PATH_MIN_FRAMES);
+}
+
+function updatePath() {
+  if (!pathDuration) return;
+  pathProgress += 1 / pathDuration;
+  const t = Math.min(pathProgress, 1);
+  const ease = t * t * (3 - 2 * t);
+  pathOffsetX = pathStartX + (pathTargetX - pathStartX) * ease;
+  pathOffsetY = pathStartY + (pathTargetY - pathStartY) * ease;
+  if (pathProgress >= 1) {
+    pathOffsetX = pathTargetX;
+    pathOffsetY = pathTargetY;
+    scheduleNextPath();
+  }
+}
+
+function initializePath() {
+  const initial = randomVector(PATH_RADIUS_MIN, PATH_RADIUS_MAX);
+  pathOffsetX = pathStartX = pathTargetX = initial.x;
+  pathOffsetY = pathStartY = pathTargetY = initial.y;
+  scheduleNextPath();
+}
+
+initializePath();
+
+for (let i = 0; i < LAYER_COUNT; i++) {
+  const layerSvg = document.createElementNS(NS, "svg");
+  layerSvg.setAttribute("viewBox", \`0 0 \${VIEW_SIZE} \${VIEW_SIZE}\`);
+  layerSvg.setAttribute("width", VIEW_SIZE);
+  layerSvg.setAttribute("height", VIEW_SIZE);
+  layerSvg.setAttribute("x", 0);
+  layerSvg.setAttribute("y", 0);
+  layerSvg.setAttribute("overflow", "visible");
+
+  // alternating wall colors for depth contrast
+  const baseLight = i % 2 === 0 ? 14 : 24;
+  const ring = buildRing(\`hsl(30,25%,\${baseLight}%)\`);
+
+  layerSvg.appendChild(ring);
+  svg.appendChild(layerSvg);
+
+  const layerData = {
+    svg: layerSvg,
+    ring,
+    z: i / LAYER_COUNT,
+    index: i,
+    driftX: 0,
+    driftY: 0,
+    pathX: pathOffsetX,
+    pathY: pathOffsetY
+  };
+  resetDrift(layerData);
+  layers.push(layerData);
+}
+
+function renderLayer(layer) {
+  const depthRatio = layer.z;          // 0 (far) .. 1 (near)
+  const outerRadius = FAR_RADIUS + (NEAR_RADIUS - FAR_RADIUS) * depthRatio;
+  const innerRadius = Math.max(outerRadius - WALL_THICKNESS, 20);
+  const deviationStrength = MIN_DRIFT_BLEND + (1 - depthRatio) * (1 - MIN_DRIFT_BLEND);
+  const baseX = layer.pathX ?? pathOffsetX;
+  const baseY = layer.pathY ?? pathOffsetY;
+  const wobbleX = baseX + layer.driftX * deviationStrength;
+  const wobbleY = baseY + layer.driftY * deviationStrength;
+
+  layer.ring.setAttribute("d", donutPath(outerRadius, innerRadius));
+
+  layer.svg.setAttribute(
+    "transform",
+    \`translate(\${CENTER + wobbleX}, \${CENTER + wobbleY}) translate(-\${CENTER}, -\${CENTER})\`
+  );
+
+  const alternatingBase = layer.index % 2 === 0 ? 12 : 18;
+  const lightness = alternatingBase + depthRatio * 28;
+  layer.ring.setAttribute("fill", \`hsl(30,25%,\${lightness}%)\`);
+}
+
+function animate() {
+  updatePath();
+  for (const layer of layers) {
+    layer.z += Z_SPEED;
+    if (layer.z > 1) {
+      layer.z -= 1;
+      resetDrift(layer);
+    }
+  }
+
+  const ordered = [...layers].sort((a, b) => a.z - b.z);
+  const fragment = document.createDocumentFragment();
+  for (const layer of ordered) {
+    renderLayer(layer);
+    fragment.appendChild(layer.svg);
+  }
+  svg.appendChild(fragment);
+
+  window.requestAnimationFrame(animate);
+}
+
+window.requestAnimationFrame(animate);
+
+`;
+
+// ----------------------- LIVE RELOAD CORE -----------------------------
+
+function runLiveCode() {
+  if (animationController) animationController.dispose();
+  animationController = createAnimationController();
+  animationController.installGlobals();
+
+  try {
+    const wrapped = CODE_PREFIX + editor.value + CODE_SUFFIX;
+
+    const fn = new Function("svg","hooks", wrapped);
+
+    console.log("Calling wrapped user code with:", view, animationController.hooks);
+
+    fn(view, animationController.hooks);
+
+    pauseBtn.textContent = "Pause";
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+editor.addEventListener("input", () => {
+  clearTimeout(window.liveReload);
+  window.liveReload = setTimeout(runLiveCode, 180);
+});
+
+pauseBtn.addEventListener("click", () => {
+  if (!animationController) return;
+  if (animationController.isPaused()) {
+    animationController.resume();
+    pauseBtn.textContent = "Pause";
+  } else {
+    animationController.pause();
+    pauseBtn.textContent = "Resume";
+  }
+});
+
+restartBtn.addEventListener("click", runLiveCode);
+
+runLiveCode();
+</script>
+
+</body>
+</html>
