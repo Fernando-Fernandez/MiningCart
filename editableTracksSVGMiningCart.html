@@ -228,6 +228,13 @@ const PATH_RADIUS_MIN = 20;
 const PATH_RADIUS_MAX = 180;
 const DRIFT_RADIUS_MAX = 10;
 const MIN_DRIFT_BLEND = 0.52;
+const TRACK_NEAR_SPREAD = 0.26;
+const TRACK_FAR_SPREAD = 0.08;
+const TRACK_NEAR_Y_FACTOR = 0.28;
+const TRACK_SEGMENT_RATIO = 0.18;
+const TRACK_MIN_SEGMENT = 30;
+const TRACK_MAX_NEAR_Y = 180;
+const TRACK_TIE_COUNT = 4;
 
 // --- clear & prep root SVG ---
 svg.innerHTML = "";
@@ -249,6 +256,93 @@ function donutPath(outerRadius, innerRadius) {
     A \${innerRadius} \${innerRadius} 0 1 1 \${innerRadius},0
     A \${innerRadius} \${innerRadius} 0 1 1 -\${innerRadius},0
   \`;
+}
+
+function railPath(nearSpread, farSpread, nearY, farY, thicknessNear, thicknessFar) {
+  const buildSide = (dir) => {
+    const nearInner = dir * (nearSpread - thicknessNear / 2);
+    const nearOuter = dir * (nearSpread + thicknessNear / 2);
+    const farInner = dir * (farSpread - thicknessFar / 2);
+    const farOuter = dir * (farSpread + thicknessFar / 2);
+    return \`
+      M \${nearInner} \${nearY}
+      L \${nearOuter} \${nearY}
+      L \${farOuter} \${farY}
+      L \${farInner} \${farY}
+      Z
+    \`;
+  };
+  return buildSide(-1) + buildSide(1);
+}
+
+function tiePath(nearSpread, farSpread, nearY, farY, count) {
+  let d = "";
+  for (let i = 0; i < count; i++) {
+    const t = count === 1 ? 1 : (i + 1) / (count + 1);
+    const y = farY + (nearY - farY) * t;
+    const spread = farSpread + (nearSpread - farSpread) * t;
+    const tieHalf = spread * 1.2;
+    d += \`M \${-tieHalf} \${y} L \${tieHalf} \${y} \`;
+  }
+  return d.trim();
+}
+
+function buildTrackElements() {
+  const group = document.createElementNS(NS, "g");
+  group.setAttribute("transform", \`translate(\${CENTER},\${CENTER})\`);
+  const ties = document.createElementNS(NS, "path");
+  ties.setAttribute("fill", "none");
+  ties.setAttribute("stroke-linecap", "round");
+  ties.setAttribute("stroke-opacity", "0.35");
+  const rails = document.createElementNS(NS, "path");
+  rails.setAttribute("fill", "#b8b2a6");
+  rails.setAttribute("fill-opacity", "0.85");
+  rails.setAttribute("stroke", "rgba(255,255,255,0.08)");
+  rails.setAttribute("stroke-width", "0.5");
+  group.appendChild(ties);
+  group.appendChild(rails);
+  return { group, ties, rails };
+}
+
+function updateTracks(layer, outerRadius, depthRatio, previousNearY) {
+  const nearSpread = Math.max(outerRadius * TRACK_NEAR_SPREAD, 8);
+  const farSpread = Math.max(outerRadius * TRACK_FAR_SPREAD, 3.5);
+  const thicknessNear = Math.max(outerRadius * 0.02, 2);
+  const thicknessFar = Math.max(thicknessNear * 0.45, 1);
+
+  const baseNear = Math.min(TRACK_MAX_NEAR_Y, outerRadius * TRACK_NEAR_Y_FACTOR);
+  const segmentLength = Math.max(TRACK_MIN_SEGMENT, outerRadius * TRACK_SEGMENT_RATIO);
+
+  let nearY = baseNear;
+  if (previousNearY !== null && previousNearY !== undefined) {
+    nearY = Math.min(
+      TRACK_MAX_NEAR_Y,
+      Math.max(previousNearY + segmentLength * 0.9, baseNear)
+    );
+  }
+
+  let farY;
+  if (previousNearY !== null && previousNearY !== undefined) {
+    farY = previousNearY;
+  } else {
+    farY = nearY - segmentLength;
+  }
+  if (farY >= nearY - 4) farY = nearY - Math.max(6, segmentLength * 0.6);
+
+  const railsD = railPath(nearSpread, farSpread, nearY, farY, thicknessNear, thicknessFar);
+  layer.tracks.rails.setAttribute("d", railsD.trim());
+
+  const tieD = tiePath(nearSpread, farSpread, nearY, farY, TRACK_TIE_COUNT);
+  layer.tracks.ties.setAttribute("d", tieD);
+  layer.tracks.ties.setAttribute("stroke-width", Math.max(0.6, thicknessNear * 0.35));
+
+  const metalLight = 32 + depthRatio * 40;
+  layer.tracks.rails.setAttribute("fill", \`hsl(28,18%,\${metalLight}%)\`);
+
+  const tieAlpha = 0.18 + depthRatio * 0.3;
+  layer.tracks.ties.setAttribute("stroke", \`rgba(150,110,70,\${tieAlpha.toFixed(3)})\`);
+
+  return nearY;
 }
 
 function buildRing(fill = "hsl(0,0%,20%)") {
@@ -340,6 +434,8 @@ for (let i = 0; i < LAYER_COUNT; i++) {
   const ring = buildRing(\`hsl(30,25%,\${baseLight}%)\`);
 
   layerSvg.appendChild(ring);
+  const trackElements = buildTrackElements();
+  layerSvg.appendChild(trackElements.group);
   svg.appendChild(layerSvg);
 
   const layerData = {
@@ -349,6 +445,7 @@ for (let i = 0; i < LAYER_COUNT; i++) {
     index: i,
     driftX: 0,
     driftY: 0,
+    tracks: trackElements,
     pathX: pathOffsetX,
     pathY: pathOffsetY
   };
@@ -356,7 +453,7 @@ for (let i = 0; i < LAYER_COUNT; i++) {
   layers.push(layerData);
 }
 
-function renderLayer(layer) {
+function renderLayer(layer, previousTrackNear) {
   const depthRatio = layer.z;          // 0 (far) .. 1 (near)
   const outerRadius = FAR_RADIUS + (NEAR_RADIUS - FAR_RADIUS) * depthRatio;
   const innerRadius = Math.max(outerRadius - WALL_THICKNESS, 20);
@@ -376,6 +473,12 @@ function renderLayer(layer) {
   const alternatingBase = layer.index % 2 === 0 ? 12 : 18;
   const lightness = alternatingBase + depthRatio * 28;
   layer.ring.setAttribute("fill", \`hsl(30,25%,\${lightness}%)\`);
+
+  if (layer.tracks) {
+    return updateTracks(layer, outerRadius, depthRatio, previousTrackNear);
+  }
+
+  return previousTrackNear;
 }
 
 function animate() {
@@ -390,8 +493,9 @@ function animate() {
 
   const ordered = [...layers].sort((a, b) => a.z - b.z);
   const fragment = document.createDocumentFragment();
+  let previousTrackNear = null;
   for (const layer of ordered) {
-    renderLayer(layer);
+    previousTrackNear = renderLayer(layer, previousTrackNear);
     fragment.appendChild(layer.svg);
   }
   svg.appendChild(fragment);
