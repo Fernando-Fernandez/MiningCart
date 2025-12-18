@@ -6,11 +6,11 @@ This repository is a playground of browser-based sketches that simulate racing t
 
 | File | Description |
 | --- | --- |
-| `miningCart1.html`, `miningCart2.html`, `miningCart3.html` | Early static experiments that render the tunnel with different lighting / perspective tricks. |
-| `asciiMiningCart.html` & `ascii-tunnel.js` | Draws the tunnel using ASCII characters inside a `<pre>` tag for a retro terminal aesthetic. |
-| `editableMiningCart.html` | Canvas animation plus a live code editor. Edit the JS on the right-hand side and the tunnel re-renders instantly. Includes the full scenery (walls, supports, lights, etc.). |
-| `editableTracksOnlyMiningCart.html` | A simplified variant that just renders the rails and basic cave shell—useful for smaller demos or quickly iterating on track math. |
-| `editableTracksSVGMiningCart.html` | Same live-editing workflow as above but renders with SVG elements instead of Canvas, making it easier to inspect shapes in DevTools. |
+| [`miningCart1.html`](./miningCart1.html), [`miningCart2.html`](./miningCart2.html), [`miningCart3.html`](./miningCart3.html) | Early static experiments that render the tunnel with different lighting / perspective tricks. |
+| [`asciiMiningCart.html`](./asciiMiningCart.html) & [`ascii-tunnel.js`](./ascii-tunnel.js) | Draws the tunnel using ASCII characters inside a `<pre>` tag for a retro terminal aesthetic. |
+| [`editableMiningCart.html`](./editableMiningCart.html) | Canvas animation plus a live code editor. Edit the JS on the right-hand side and the tunnel re-renders instantly. Includes the full scenery (walls, supports, lights, etc.). |
+| [`editableTracksOnlyMiningCart.html`](./editableTracksOnlyMiningCart.html) | A simplified variant that just renders the rails and basic cave shell—useful for smaller demos or quickly iterating on track math. |
+| [`editableTracksSVGMiningCart.html`](./editableTracksSVGMiningCart.html) | Same live-editing workflow as above but renders with SVG elements instead of Canvas, making it easier to inspect shapes in DevTools. |
 
 ## Getting Started
 
