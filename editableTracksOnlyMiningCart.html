@@ -351,8 +351,8 @@ function drawSegment(i) {
   const depthScaleX = scale * 0.06;
   const depthScaleY = scale * 0.06; // was 0.04
 
-  const railWidth = Math.max(1, scale * 0.8);
-  const railHeight = Math.max(2, scale * 16);
+  const railWidth = Math.max(1, scale * 0.16);
+  const railHeight = Math.max(2, scale * 4);
   const spacing = scale * TRACK_SPACING;
 
   // Cave shell as a loose ellipse of uneven rectangles
@@ -368,15 +368,17 @@ function drawSegment(i) {
     context.fillRect(x - width / 2, y, width, height);
   }
 
-  //context.fillStyle = "#373737";
-  //context.fillRect(centerX - spacing - railWidth / 2, centerY, railWidth, railHeight);
-  //context.fillRect(centerX + spacing - railWidth / 2, centerY, railWidth, railHeight);
+  //context.fillStyle = "#909090";
+  //context.fillRect(centerX - spacing/2 - railWidth, centerY + railHeight
+  //  , railWidth * 2, railHeight);
+  //context.fillRect(centerX + spacing/2 - railWidth, centerY + railHeight
+  //  , railWidth * 2, railHeight);
 
   //if (seg.hasTie) {
-  //  const tieWidth = spacing * 2.4 + railWidth;
+  //  const tieWidth = spacing + railWidth;
   //  const tieHeight = Math.max(1, scale * 0.9);
-  //  context.fillStyle = "#c0c0c0";
-  //  context.fillRect(centerX - tieWidth / 2, centerY + railHeight - tieHeight * 2, tieWidth, tieHeight);
+  //  context.fillStyle = "#373737";
+  //  context.fillRect(centerX - tieWidth / 2, centerY + tieHeight * 4.8, tieWidth, tieHeight);
   //}
 }
 
